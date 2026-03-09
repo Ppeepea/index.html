@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Badminton TCI - v48.0</title>
+    <title>Badminton TCI - v48.1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @keyframes startGlow { 0%, 100% { box-shadow: 0 0 5px rgba(34, 197, 94, 0.4); } 50% { box-shadow: 0 0 30px rgba(34, 197, 94, 0.8); transform: scale(1.02); } }
         .glow-start { animation: startGlow 1.5s infinite; border: 3px solid #4ade80 !important; }
         .umpire-only { transition: all 0.3s ease; opacity: 0.3; pointer-events: none; }
-        .remove-btn { position: relative; z-index: 50; cursor: pointer; padding: 12px; }
+        .remove-btn { position: relative; z-index: 50; cursor: pointer; padding: 10px; }
         details summary::-webkit-details-marker { display:none; }
         summary { list-style: none; outline: none; cursor: pointer; }
-        body { -webkit-tap-highlight-color: transparent; font-family: sans-serif; }
+        body { -webkit-tap-highlight-color: transparent; }
     </style>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
@@ -33,7 +33,7 @@
 
         const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "--:--";
 
-        // --- Master Actions ---
+        // --- CORE ACTIONS ---
         window.toggleUmpire = () => {
             isUmpire = !isUmpire;
             document.querySelectorAll('.umpire-only').forEach(el => {
@@ -45,25 +45,28 @@
             btn.className = isUmpire ? "fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-full font-black text-xs z-50 shadow-2xl" : "fixed top-4 right-4 bg-slate-800 text-white px-4 py-2 rounded-full font-black text-[10px] z-50 shadow-lg opacity-80";
         };
 
-        window.removeFromQueue = (id) => { if(confirm("ลบรายชื่อนี้?")) remove(ref(db, `daily_players/${id}`)); };
-        window.clearAllQueues = async () => { if(confirm('⚠️ ล้างคิวทั้งหมด?')) await set(ref(db, 'daily_players'), null); };
+        // ฟังก์ชัน Mark Coming (ส่งค่าไปที่โหนด attending_today)
+        window.sendMarkComing = (name) => {
+            if(!name) return;
+            set(ref(db, 'attending_today/' + name), {
+                timestamp: serverTimestamp()
+            }).then(() => console.log("Marked:", name)).catch(e => alert("Error: " + e.message));
+        };
 
         window.joinQueue = (name) => {
             push(ref(db, 'daily_players'), { name, timestamp: serverTimestamp() });
-            remove(ref(db, `attending_today/${name}`));
+            remove(ref(db, 'attending_today/' + name));
         };
 
-        // ฟังก์ชันใหม่: Mark Coming
-        window.markComing = (name) => {
-            set(ref(db, `attending_today/${name}`), { timestamp: serverTimestamp() });
-        };
+        window.removeFromQueue = (id) => { if(confirm("ลบรายชื่อนี้?")) remove(ref(db, `daily_players/${id}`)); };
+        window.clearAllQueues = async () => { if(confirm('⚠️ ล้างคิวทั้งหมด?')) await set(ref(db, 'daily_players'), null); };
 
-        // ฟังก์ชันคำนวณระยะเวลา
+        // --- TIMER & GAME LOGIC ---
         const calculateDuration = (startTime) => {
             if (!startTime) return "N/A";
             const diffMs = Date.now() - startTime;
             const mins = Math.floor(diffMs / 60000);
-            return `${mins} min`;
+            return mins + " min";
         };
 
         window.finalizeGame = (winner, sA, sB) => {
@@ -71,12 +74,9 @@
                 const data = snap.val();
                 const match = data.current_match;
                 const startTime = data.match_start_time;
-                
                 if (match) {
                     push(ref(db, 'match_history'), { 
-                        match, 
-                        winner, 
-                        score: `${sA}-${sB}`, 
+                        match, winner, score: `${sA}-${sB}`, 
                         duration: calculateDuration(startTime),
                         timestamp: serverTimestamp() 
                     });
@@ -95,18 +95,18 @@
             const p = currentQ.slice(0, 4);
             set(ref(db, 'current_match'), { tA: [p[0], p[3]], tB: [p[1], p[2]] });
             set(ref(db, 'current_score'), { a: 0, b: 0 });
-            set(ref(db, 'match_start_time'), Date.now()); // เริ่มจับเวลา
+            set(ref(db, 'match_start_time'), Date.now());
             p.forEach(x => remove(ref(db, `daily_players/${x.id}`)));
         };
 
-        // --- Realtime Listeners ---
+        // --- SYNC DATA ---
         onValue(ref(db, 'master_players'), s => {
             const grid = document.getElementById('pGrid'); grid.innerHTML = "";
             const data = s.val() || {};
             Object.keys(data).sort().forEach(n => {
                 grid.innerHTML += `<div class="bg-white rounded-xl p-2 shadow-sm border border-slate-100 flex flex-col gap-2">
                     <button onclick="joinQueue('${n}')" class="py-3 bg-slate-50 rounded-lg text-[10px] font-black uppercase text-slate-800">${n}</button>
-                    <button onclick="markComing('${n}')" class="text-[8px] font-black text-blue-500 uppercase">Mark Coming</button>
+                    <button onclick="sendMarkComing('${n}')" class="text-[8px] font-black text-blue-500 uppercase py-1">Mark Coming</button>
                 </div>`;
             });
         });
@@ -132,7 +132,7 @@
         onValue(ref(db, 'attending_today'), s => {
             const list = document.getElementById('attList'); list.innerHTML = "";
             let count = 0; 
-            s.forEach(c => { count++; list.innerHTML += `<button onclick="joinQueue('${c.key}')" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-[10px] font-black mr-2 mb-2 uppercase shadow-md">${c.key}</button>`; });
+            s.forEach(c => { count++; list.innerHTML += `<button onclick="joinQueue('${c.key}')" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-[10px] font-black mr-2 mb-2 uppercase shadow-md animate-pulse">${c.key}</button>`; });
             document.getElementById('attCount').innerText = count;
         });
 
@@ -150,7 +150,7 @@
             const data = [];
             s.forEach(c => { data.push(c.val()); });
             data.reverse().slice(0, 5).forEach(m => {
-                history.innerHTML += `<div class="p-3 bg-slate-50 rounded-xl mb-2 text-[10px] font-bold text-slate-600 flex justify-between border border-slate-100">
+                history.innerHTML += `<div class="p-3 bg-slate-50 rounded-xl mb-2 text-[10px] font-bold text-slate-600 flex justify-between border border-slate-100 shadow-sm">
                     <span>${m.match.tA[0].name}+${m.match.tA[1].name} vs ${m.match.tB[0].name}+${m.match.tB[1].name}</span>
                     <span class="text-blue-600">${m.score} (${m.duration || '--'})</span>
                 </div>`;
@@ -186,7 +186,7 @@
     <div class="mb-6 bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 flex items-center justify-between">
         <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2 italic">Shuttles Used</span>
         <div class="flex items-center gap-4">
-            <button onclick="runTransaction(ref(db, 'shuttle_count'), c => Math.max(0,(c||0)-1))" class="w-10 h-10 rounded-full bg-slate-50 text-slate-400 font-bold">-</button>
+            <button onclick="runTransaction(ref(db, 'shuttle_count'), c => Math.max(0,(c||0)-1))" class="w-10 h-10 rounded-full bg-slate-50 text-slate-400 font-bold border">-</button>
             <span id="shuttleDisplay" class="text-3xl font-black text-slate-800 w-10 text-center">0</span>
             <button onclick="runTransaction(ref(db, 'shuttle_count'), c => (c||0)+1)" class="w-10 h-10 rounded-full bg-yellow-400 text-white font-bold shadow-lg">+</button>
         </div>
@@ -195,7 +195,10 @@
     <button id="startBtn" onclick="startSmartMatch()" class="umpire-only w-full py-8 bg-slate-900 text-white rounded-[3rem] font-black text-2xl uppercase mb-10 shadow-2xl">Start Match</button>
 
     <details class="mb-4 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden" open>
-        <summary class="p-6 flex justify-between items-center hover:bg-slate-50"><span class="text-[10px] font-black text-slate-500 uppercase italic tracking-widest">Coming Today (<span id="attCount">0</span>)</span><span class="text-blue-500 text-[9px] font-black uppercase">Tap Name to Queue ▼</span></summary>
+        <summary class="p-6 flex justify-between items-center hover:bg-slate-50">
+            <span class="text-[10px] font-black text-slate-500 uppercase italic tracking-widest">Coming Today (<span id="attCount">0</span>)</span>
+            <span class="text-blue-500 text-[9px] font-black uppercase">Tap to Queue ▼</span>
+        </summary>
         <div id="attList" class="flex flex-wrap p-6 pt-0"></div>
     </details>
 
@@ -207,24 +210,24 @@
         <div id="qList" class="p-6 pt-0"></div>
     </details>
 
-    <div class="mb-4 bg-white rounded-[2rem] shadow-sm border border-slate-100 p-6">
-        <span class="text-[10px] font-black text-slate-400 uppercase italic tracking-widest block mb-4">Recent Matches</span>
+    <div class="mb-6 bg-white rounded-[2rem] shadow-sm border border-slate-100 p-6">
+        <span class="text-[10px] font-black text-slate-400 uppercase italic tracking-widest block mb-4">Recent Matches (w/ Timer)</span>
         <div id="historyList"></div>
     </div>
 
     <details class="mb-10 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
-        <summary class="p-6 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] hover:bg-slate-50">▼ Player Directory (Add/Edit)</summary>
+        <summary class="p-6 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] hover:bg-slate-50">▼ Player Directory (Register)</summary>
         <div class="p-6 pt-0">
             <div class="flex bg-slate-100 p-2 rounded-2xl mb-6">
-                <input type="text" id="newPlayerName" placeholder="New Player Name..." class="bg-transparent flex-1 px-4 py-2 text-sm font-bold outline-none">
-                <button onclick="const n=document.getElementById('newPlayerName').value.trim(); if(n) { set(ref(db, `master_players/${n}`), true); document.getElementById('newPlayerName').value=''; }" class="bg-blue-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase shadow-md">Add</button>
+                <input type="text" id="newPlayerName" placeholder="Enter Name..." class="bg-transparent flex-1 px-4 py-2 text-sm font-bold outline-none uppercase">
+                <button onclick="const n=document.getElementById('newPlayerName').value.trim().toUpperCase(); if(n) { set(ref(db, `master_players/${n}`), true); document.getElementById('newPlayerName').value=''; }" class="bg-blue-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase shadow-md">Add</button>
             </div>
             <div id="pGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
         </div>
     </details>
 
     <div class="bg-slate-900 text-white rounded-[3rem] p-10 shadow-2xl text-center">
-        <button onclick="if(confirm('Finish Night?')) { set(ref(db,'daily_players'),null); set(ref(db,'attending_today'),null); set(ref(db,'shuttle_count'),0); set(ref(db,'current_match'),null); set(ref(db,'match_history'),null); set(ref(db,'current_score'),{a:0,b:0}); }" class="umpire-only w-full py-5 bg-green-600 text-white rounded-2xl font-black text-xs uppercase">🏁 Finish Night (Full Reset)</button>
+        <button onclick="if(confirm('Reset Everything for the Night?')) { set(ref(db,'daily_players'),null); set(ref(db,'attending_today'),null); set(ref(db,'shuttle_count'),0); set(ref(db,'current_match'),null); set(ref(db,'match_history'),null); set(ref(db,'current_score'),{a:0,b:0}); }" class="umpire-only w-full py-5 bg-green-600 text-white rounded-2xl font-black text-xs uppercase shadow-xl">🏁 Finish Night (Full Reset)</button>
     </div>
 </body>
 </html>
