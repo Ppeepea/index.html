@@ -3,12 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Badminton TCI - v48.5</title>
+    <title>Badminton TCI - v49.0 (Deuce System)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @keyframes startGlow { 0%, 100% { box-shadow: 0 0 5px rgba(34, 197, 94, 0.4); } 50% { box-shadow: 0 0 30px rgba(34, 197, 94, 0.8); transform: scale(1.02); } }
         .glow-start { animation: startGlow 1.5s infinite; border: 3px solid #4ade80 !important; }
         .umpire-only { transition: all 0.3s ease; opacity: 0.3; pointer-events: none; }
+        .active-mode { background-color: #0f172a !important; color: white !important; border-color: #0f172a !important; }
         .remove-btn { position: relative; z-index: 50; cursor: pointer; padding: 10px; }
         details summary::-webkit-details-marker { display:none; }
         summary { list-style: none; outline: none; cursor: pointer; }
@@ -30,8 +31,8 @@
 
         let currentQ = [];
         let isUmpire = false;
+        let gameLimit = 21; 
 
-        // กลับมาใช้ Format 12 ชั่วโมงแบบเดิม (e.g., 05:30 PM) แต่เป็นภาษาอังกฤษ
         const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : "--:--";
 
         window.toggleUmpire = () => {
@@ -43,6 +44,11 @@
             const btn = document.getElementById('lockBtn');
             btn.innerText = isUmpire ? "🏸 UMPIRE ACTIVE" : "🔒 UNLOCK UMPIRE";
             btn.className = isUmpire ? "fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-full font-black text-xs z-50 shadow-2xl" : "fixed top-4 right-4 bg-slate-800 text-white px-4 py-2 rounded-full font-black text-[10px] z-50 shadow-lg opacity-80";
+        };
+
+        window.setGameMode = (pts) => {
+            if(!isUmpire) return;
+            set(ref(db, 'game_settings/limit'), pts);
         };
 
         window.sendMarkComing = (name) => {
@@ -63,7 +69,6 @@
             }
         };
 
-        // ภาษาอังกฤษสำหรับ Remove & Clear
         window.removeFromQueue = (id) => { if(confirm("Remove this player?")) remove(ref(db, `daily_players/${id}`)); };
         window.clearAllQueues = async () => { if(confirm('⚠️ Clear all players from queue?')) await set(ref(db, 'daily_players'), null); };
 
@@ -81,7 +86,8 @@
                     push(ref(db, 'match_history'), { 
                         match: data.current_match, winner, score: `${sA}-${sB}`, 
                         duration: calculateDuration(data.match_start_time),
-                        timestamp: serverTimestamp() 
+                        timestamp: serverTimestamp(),
+                        mode: gameLimit
                     });
                     [...data.current_match.tA, ...data.current_match.tB].forEach(p => {
                         push(ref(db, 'daily_players'), { name: p.name, timestamp: serverTimestamp() });
@@ -102,6 +108,31 @@
             p.forEach(x => remove(ref(db, `daily_players/${x.id}`)));
         };
 
+        // Listen for Game Mode (15/21)
+        onValue(ref(db, 'game_settings/limit'), s => {
+            gameLimit = s.val() || 21;
+            document.getElementById('btn15').className = `flex-1 py-3 rounded-2xl font-black text-xs border-2 transition-all ${gameLimit === 15 ? 'active-mode' : 'bg-white text-slate-400 border-slate-100'}`;
+            document.getElementById('btn21').className = `flex-1 py-3 rounded-2xl font-black text-xs border-2 transition-all ${gameLimit === 21 ? 'active-mode' : 'bg-white text-slate-400 border-slate-100'}`;
+        });
+
+        onValue(ref(db, 'current_score'), s => { 
+            const d = s.val() || { a: 0, b: 0 }; 
+            document.getElementById('scoreA').innerText = d.a; 
+            document.getElementById('scoreB').innerText = d.b; 
+
+            if (isUmpire) {
+                const maxS = Math.max(d.a, d.b);
+                const diff = Math.abs(d.a - d.b);
+                const cap = (gameLimit === 21) ? 30 : 20;
+
+                // Deuce Logic: ต้องถึงแต้มเป้าหมาย และห่างกันอย่างน้อย 2 แต้ม หรือถึงแต้มเพดาน
+                if ((maxS >= gameLimit && diff >= 2) || maxS >= cap) { 
+                    setTimeout(() => finalizeGame(d.a > d.b ? 'RED' : 'BLUE', d.a, d.b), 800); 
+                }
+            }
+        });
+
+        // --- Standard UI Listeners ---
         onValue(ref(db, 'master_players'), s => {
             const grid = document.getElementById('pGrid'); grid.innerHTML = "";
             const data = s.val() || {};
@@ -138,15 +169,6 @@
             document.getElementById('attCount').innerText = count;
         });
 
-        onValue(ref(db, 'current_score'), s => { 
-            const d = s.val() || { a: 0, b: 0 }; 
-            document.getElementById('scoreA').innerText = d.a; 
-            document.getElementById('scoreB').innerText = d.b; 
-            if (isUmpire && ((Math.max(d.a, d.b) >= 21 && Math.abs(d.a - d.b) >= 2) || Math.max(d.a, d.b) >= 30)) { 
-                setTimeout(() => finalizeGame(d.a > d.b ? 'RED' : 'BLUE', d.a, d.b), 800); 
-            }
-        });
-
         onValue(ref(db, 'match_history'), s => {
             const history = document.getElementById('historyList'); history.innerHTML = "";
             const data = [];
@@ -161,7 +183,6 @@
 
         onValue(ref(db, 'shuttle_count'), s => { document.getElementById('shuttleDisplay').innerText = s.val() || 0; });
         onValue(ref(db, 'current_match'), s => { document.getElementById('scoreArea').className = !!s.val() ? "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6" : "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 opacity-20 grayscale"; });
-        
         window.handleKeyPress = (e) => { if(e.key === 'Enter') addNewPlayer(); };
     </script>
 </head>
@@ -187,6 +208,13 @@
         </div>
     </div>
 
+    <div class="umpire-only mb-6 flex gap-3">
+        <button id="btn15" onclick="setGameMode(15)" class="flex-1 py-3 bg-white rounded-2xl font-black text-xs border-2 border-slate-100 text-slate-400">15 POINTS MODE</button>
+        <button id="btn21" onclick="setGameMode(21)" class="flex-1 py-3 bg-white rounded-2xl font-black text-xs border-2 border-slate-100 text-slate-400">21 POINTS MODE</button>
+    </div>
+
+    <button id="startBtn" onclick="startSmartMatch()" class="umpire-only w-full py-8 bg-slate-900 text-white rounded-[3rem] font-black text-2xl uppercase mb-10 shadow-2xl">Start Match</button>
+
     <div class="mb-6 bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 flex items-center justify-between">
         <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2 italic">Shuttles Used</span>
         <div class="flex items-center gap-4">
@@ -195,8 +223,6 @@
             <button onclick="runTransaction(ref(db, 'shuttle_count'), c => (c||0)+1)" class="w-10 h-10 rounded-full bg-yellow-400 text-white font-bold shadow-lg">+</button>
         </div>
     </div>
-
-    <button id="startBtn" onclick="startSmartMatch()" class="umpire-only w-full py-8 bg-slate-900 text-white rounded-[3rem] font-black text-2xl uppercase mb-10 shadow-2xl">Start Match</button>
 
     <details class="mb-4 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden" open>
         <summary class="p-6 flex justify-between items-center hover:bg-slate-50">
@@ -216,7 +242,7 @@
 
     <details class="mb-6 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
         <summary class="p-6 flex justify-between items-center hover:bg-slate-50">
-            <span class="text-[10px] font-black text-slate-500 uppercase italic tracking-widest">Recent Matches (w/ Timer)</span>
+            <span class="text-[10px] font-black text-slate-500 uppercase italic tracking-widest">Recent Matches</span>
             <span class="text-slate-400 text-[9px] font-black uppercase">History ▼</span>
         </summary>
         <div id="historyList" class="p-6 pt-0"></div>
@@ -234,7 +260,7 @@
     </details>
 
     <div class="bg-slate-900 text-white rounded-[3rem] p-10 shadow-2xl text-center">
-        <button onclick="if(confirm('Reset Everything for the Night?')) { set(ref(db,'daily_players'),null); set(ref(db,'attending_today'),null); set(ref(db,'shuttle_count'),0); set(ref(db,'current_match'),null); set(ref(db,'match_history'),null); set(ref(db,'current_score'),{a:0,b:0}); }" class="umpire-only w-full py-5 bg-green-600 text-white rounded-2xl font-black text-xs uppercase shadow-xl">🏁 Finish Night (Full Reset)</button>
+        <button onclick="if(confirm('Reset Everything for the Night?')) { set(ref(db,'daily_players'),null); set(ref(db,'attending_today'),null); set(ref(db,'shuttle_count'),0); set(ref(db,'current_match'),null); set(ref(db,'match_history'),null); set(ref(db,'current_score'),{a:0,b:0}); set(ref(db,'game_settings/limit'),21); }" class="umpire-only w-full py-5 bg-green-600 text-white rounded-2xl font-black text-xs uppercase shadow-xl">🏁 Finish Night (Full Reset)</button>
     </div>
 </body>
 </html>
