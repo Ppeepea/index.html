@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Badminton TCI - v47.1</title>
+    <title>Badminton TCI - v48.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @keyframes startGlow { 0%, 100% { box-shadow: 0 0 5px rgba(34, 197, 94, 0.4); } 50% { box-shadow: 0 0 30px rgba(34, 197, 94, 0.8); transform: scale(1.02); } }
         .glow-start { animation: startGlow 1.5s infinite; border: 3px solid #4ade80 !important; }
         .umpire-only { transition: all 0.3s ease; opacity: 0.3; pointer-events: none; }
-        .remove-btn { position: relative; z-index: 50 !important; cursor: pointer !important; pointer-events: auto !important; padding: 12px; }
+        .remove-btn { position: relative; z-index: 50; cursor: pointer; padding: 12px; }
         details summary::-webkit-details-marker { display:none; }
         summary { list-style: none; outline: none; cursor: pointer; }
-        body { -webkit-tap-highlight-color: transparent; }
+        body { -webkit-tap-highlight-color: transparent; font-family: sans-serif; }
     </style>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
@@ -33,6 +33,7 @@
 
         const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "--:--";
 
+        // --- Master Actions ---
         window.toggleUmpire = () => {
             isUmpire = !isUmpire;
             document.querySelectorAll('.umpire-only').forEach(el => {
@@ -45,24 +46,40 @@
         };
 
         window.removeFromQueue = (id) => { if(confirm("ลบรายชื่อนี้?")) remove(ref(db, `daily_players/${id}`)); };
-
-        window.clearAllQueues = async () => {
-            if(confirm('⚠️ ล้างคิวทั้งหมด?')) {
-                try { await set(ref(db, 'daily_players'), null); } 
-                catch (e) { alert("ลบไม่ได้: เช็คสิทธิ์ Firebase"); }
-            }
-        };
+        window.clearAllQueues = async () => { if(confirm('⚠️ ล้างคิวทั้งหมด?')) await set(ref(db, 'daily_players'), null); };
 
         window.joinQueue = (name) => {
             push(ref(db, 'daily_players'), { name, timestamp: serverTimestamp() });
             remove(ref(db, `attending_today/${name}`));
         };
 
+        // ฟังก์ชันใหม่: Mark Coming
+        window.markComing = (name) => {
+            set(ref(db, `attending_today/${name}`), { timestamp: serverTimestamp() });
+        };
+
+        // ฟังก์ชันคำนวณระยะเวลา
+        const calculateDuration = (startTime) => {
+            if (!startTime) return "N/A";
+            const diffMs = Date.now() - startTime;
+            const mins = Math.floor(diffMs / 60000);
+            return `${mins} min`;
+        };
+
         window.finalizeGame = (winner, sA, sB) => {
-            onValue(ref(db, 'current_match'), (snap) => {
-                const match = snap.val();
+            onValue(ref(db, '/'), (snap) => {
+                const data = snap.val();
+                const match = data.current_match;
+                const startTime = data.match_start_time;
+                
                 if (match) {
-                    push(ref(db, 'match_history'), { match, winner, score: `${sA}-${sB}`, timestamp: serverTimestamp() });
+                    push(ref(db, 'match_history'), { 
+                        match, 
+                        winner, 
+                        score: `${sA}-${sB}`, 
+                        duration: calculateDuration(startTime),
+                        timestamp: serverTimestamp() 
+                    });
                     [...match.tA, ...match.tB].forEach(p => {
                         push(ref(db, 'daily_players'), { name: p.name, timestamp: serverTimestamp() });
                     });
@@ -70,6 +87,7 @@
             }, { onlyOnce: true });
             set(ref(db, 'current_score'), { a: 0, b: 0 }); 
             set(ref(db, 'current_match'), null);
+            set(ref(db, 'match_start_time'), null);
         };
 
         window.startSmartMatch = () => {
@@ -77,16 +95,18 @@
             const p = currentQ.slice(0, 4);
             set(ref(db, 'current_match'), { tA: [p[0], p[3]], tB: [p[1], p[2]] });
             set(ref(db, 'current_score'), { a: 0, b: 0 });
+            set(ref(db, 'match_start_time'), Date.now()); // เริ่มจับเวลา
             p.forEach(x => remove(ref(db, `daily_players/${x.id}`)));
         };
 
+        // --- Realtime Listeners ---
         onValue(ref(db, 'master_players'), s => {
             const grid = document.getElementById('pGrid'); grid.innerHTML = "";
             const data = s.val() || {};
             Object.keys(data).sort().forEach(n => {
                 grid.innerHTML += `<div class="bg-white rounded-xl p-2 shadow-sm border border-slate-100 flex flex-col gap-2">
                     <button onclick="joinQueue('${n}')" class="py-3 bg-slate-50 rounded-lg text-[10px] font-black uppercase text-slate-800">${n}</button>
-                    <button onclick="set(ref(db, 'attending_today/${n}'), {timestamp: serverTimestamp()})" class="text-[8px] font-black text-blue-500 uppercase">Mark Coming</button>
+                    <button onclick="markComing('${n}')" class="text-[8px] font-black text-blue-500 uppercase">Mark Coming</button>
                 </div>`;
             });
         });
@@ -98,7 +118,7 @@
             const list = document.getElementById('qList'); list.innerHTML = "";
             currentQ.forEach((p, i) => {
                 list.innerHTML += `<div class="p-4 bg-white rounded-2xl mb-2 flex justify-between items-center border-l-8 ${i < 4 ? 'border-yellow-400' : 'border-slate-100'} shadow-sm">
-                    <div class="flex flex-col"><span class="font-black text-[11px] uppercase">${p.name}</span><span class="text-[8px] text-slate-400 font-bold uppercase mt-1">🕒 ${formatTime(p.timestamp)}</span></div>
+                    <div class="flex flex-col"><span class="font-black text-[11px] uppercase">${p.name}</span><span class="text-[8px] text-slate-400 font-bold mt-1 uppercase">🕒 ${formatTime(p.timestamp)}</span></div>
                     <div onclick="removeFromQueue('${p.id}')" class="remove-btn text-slate-300 hover:text-red-500 text-3xl font-light">×</div>
                 </div>`;
             });
@@ -111,7 +131,8 @@
 
         onValue(ref(db, 'attending_today'), s => {
             const list = document.getElementById('attList'); list.innerHTML = "";
-            let count = 0; s.forEach(c => { count++; list.innerHTML += `<button onclick="joinQueue('${c.key}')" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-[10px] font-black mr-2 mb-2 uppercase shadow-md">${c.key}</button>`; });
+            let count = 0; 
+            s.forEach(c => { count++; list.innerHTML += `<button onclick="joinQueue('${c.key}')" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-[10px] font-black mr-2 mb-2 uppercase shadow-md">${c.key}</button>`; });
             document.getElementById('attCount').innerText = count;
         });
 
@@ -123,8 +144,21 @@
                 setTimeout(() => finalizeGame(d.a > d.b ? 'RED' : 'BLUE', d.a, d.b), 800); 
             }
         });
+
+        onValue(ref(db, 'match_history'), s => {
+            const history = document.getElementById('historyList'); history.innerHTML = "";
+            const data = [];
+            s.forEach(c => { data.push(c.val()); });
+            data.reverse().slice(0, 5).forEach(m => {
+                history.innerHTML += `<div class="p-3 bg-slate-50 rounded-xl mb-2 text-[10px] font-bold text-slate-600 flex justify-between border border-slate-100">
+                    <span>${m.match.tA[0].name}+${m.match.tA[1].name} vs ${m.match.tB[0].name}+${m.match.tB[1].name}</span>
+                    <span class="text-blue-600">${m.score} (${m.duration || '--'})</span>
+                </div>`;
+            });
+        });
+
         onValue(ref(db, 'shuttle_count'), s => { document.getElementById('shuttleDisplay').innerText = s.val() || 0; });
-        onValue(ref(db, 'current_match'), s => { document.getElementById('scoreArea').className = !!s.val() ? "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 transition-all" : "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 opacity-20 grayscale transition-all"; });
+        onValue(ref(db, 'current_match'), s => { document.getElementById('scoreArea').className = !!s.val() ? "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6" : "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 opacity-20 grayscale"; });
     </script>
 </head>
 <body class="bg-[#F8FAFC] p-4 md:p-8 max-w-4xl mx-auto pb-20">
@@ -132,7 +166,7 @@
     
     <div id="nextBox" class="mb-6"><div id="nextBoxContent" class="bg-black text-white p-6 rounded-[2.5rem] text-center font-black text-[11px] uppercase italic shadow-2xl">Connecting...</div></div>
 
-    <div id="scoreArea" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 opacity-20 grayscale transition-all">
+    <div id="scoreArea" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 opacity-20 grayscale">
         <div class="bg-red-600 text-white rounded-[3rem] p-6 shadow-xl flex flex-col items-center">
             <div id="scoreA" class="text-9xl font-black mb-4">0</div>
             <div class="umpire-only flex gap-2 w-full">
@@ -165,13 +199,18 @@
         <div id="attList" class="flex flex-wrap p-6 pt-0"></div>
     </details>
 
-    <details class="mb-10 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden" open>
+    <details class="mb-4 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden" open>
         <summary class="p-6 flex justify-between items-center hover:bg-slate-50">
             <span class="text-[10px] font-black text-slate-500 uppercase italic tracking-widest">Waiting Queue (<span id="qCount">0</span>)</span>
             <button onclick="clearAllQueues()" class="umpire-only bg-orange-100 text-orange-600 px-3 py-1 rounded-lg text-[8px] font-black uppercase">🗑️ Clear Queue</button>
         </summary>
         <div id="qList" class="p-6 pt-0"></div>
     </details>
+
+    <div class="mb-4 bg-white rounded-[2rem] shadow-sm border border-slate-100 p-6">
+        <span class="text-[10px] font-black text-slate-400 uppercase italic tracking-widest block mb-4">Recent Matches</span>
+        <div id="historyList"></div>
+    </div>
 
     <details class="mb-10 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
         <summary class="p-6 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] hover:bg-slate-50">▼ Player Directory (Add/Edit)</summary>
@@ -184,8 +223,8 @@
         </div>
     </details>
 
-    <div class="bg-slate-900 text-white rounded-[3rem] p-10 shadow-2xl">
-        <button onclick="if(confirm('Finish Night?')) { set(ref(db,'daily_players'),null); set(ref(db,'attending_today'),null); set(ref(db,'shuttle_count'),0); set(ref(db,'current_match'),null); set(ref(db,'current_score'),{a:0,b:0}); }" class="umpire-only w-full py-5 bg-green-600 text-white rounded-2xl font-black text-xs uppercase">🏁 Finish Night (Full Reset)</button>
+    <div class="bg-slate-900 text-white rounded-[3rem] p-10 shadow-2xl text-center">
+        <button onclick="if(confirm('Finish Night?')) { set(ref(db,'daily_players'),null); set(ref(db,'attending_today'),null); set(ref(db,'shuttle_count'),0); set(ref(db,'current_match'),null); set(ref(db,'match_history'),null); set(ref(db,'current_score'),{a:0,b:0}); }" class="umpire-only w-full py-5 bg-green-600 text-white rounded-2xl font-black text-xs uppercase">🏁 Finish Night (Full Reset)</button>
     </div>
 </body>
 </html>
