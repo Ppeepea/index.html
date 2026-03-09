@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Badminton TCI - v47.1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes startGlow { 0%, 100% { box-shadow: 0 0 5px rgba(34, 197, 94, 0.4); } 50% { box-shadow: 0 0 30px rgba(34, 197, 94, 0.8); transform: scale(1.02); } }
+        .glow-start { animation: startGlow 1.5s infinite; border: 3px solid #4ade80 !important; }
+        .umpire-only { transition: all 0.3s ease; opacity: 0.3; pointer-events: none; }
+        .remove-btn { position: relative; z-index: 50 !important; cursor: pointer !important; pointer-events: auto !important; padding: 12px; }
+        details summary::-webkit-details-marker { display:none; }
+        summary { list-style: none; outline: none; cursor: pointer; }
+        body { -webkit-tap-highlight-color: transparent; }
+    </style>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, push, onValue, remove, set, runTransaction, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDipcTU8qrs5Ic4L2_r718umgd5S67F5aA",
+            authDomain: "badminton-queue-ec518.firebaseapp.com",
+            databaseURL: "https://badminton-queue-ec518-default-rtdb.firebaseio.com",
+            projectId: "badminton-queue-ec518",
+            appId: "1:611047468162:web:1731d4d1bb928f5d5b989b"
+        };
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        let currentQ = [];
+        let isUmpire = false;
+
+        const formatTime = (ts) => ts ? new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "--:--";
+
+        window.toggleUmpire = () => {
+            isUmpire = !isUmpire;
+            document.querySelectorAll('.umpire-only').forEach(el => {
+                el.style.opacity = isUmpire ? "1" : "0.3";
+                el.style.pointerEvents = isUmpire ? "auto" : "none";
+            });
+            const btn = document.getElementById('lockBtn');
+            btn.innerText = isUmpire ? "🏸 UMPIRE ACTIVE" : "🔒 UNLOCK UMPIRE";
+            btn.className = isUmpire ? "fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-full font-black text-xs z-50 shadow-2xl" : "fixed top-4 right-4 bg-slate-800 text-white px-4 py-2 rounded-full font-black text-[10px] z-50 shadow-lg opacity-80";
+        };
+
+        window.removeFromQueue = (id) => { if(confirm("ลบรายชื่อนี้?")) remove(ref(db, `daily_players/${id}`)); };
+
+        window.clearAllQueues = async () => {
+            if(confirm('⚠️ ล้างคิวทั้งหมด?')) {
+                try { await set(ref(db, 'daily_players'), null); } 
+                catch (e) { alert("ลบไม่ได้: เช็คสิทธิ์ Firebase"); }
+            }
+        };
+
+        window.joinQueue = (name) => {
+            push(ref(db, 'daily_players'), { name, timestamp: serverTimestamp() });
+            remove(ref(db, `attending_today/${name}`));
+        };
+
+        window.finalizeGame = (winner, sA, sB) => {
+            onValue(ref(db, 'current_match'), (snap) => {
+                const match = snap.val();
+                if (match) {
+                    push(ref(db, 'match_history'), { match, winner, score: `${sA}-${sB}`, timestamp: serverTimestamp() });
+                    [...match.tA, ...match.tB].forEach(p => {
+                        push(ref(db, 'daily_players'), { name: p.name, timestamp: serverTimestamp() });
+                    });
+                }
+            }, { onlyOnce: true });
+            set(ref(db, 'current_score'), { a: 0, b: 0 }); 
+            set(ref(db, 'current_match'), null);
+        };
+
+        window.startSmartMatch = () => {
+            if (currentQ.length < 4) return;
+            const p = currentQ.slice(0, 4);
+            set(ref(db, 'current_match'), { tA: [p[0], p[3]], tB: [p[1], p[2]] });
+            set(ref(db, 'current_score'), { a: 0, b: 0 });
+            p.forEach(x => remove(ref(db, `daily_players/${x.id}`)));
+        };
+
+        onValue(ref(db, 'master_players'), s => {
+            const grid = document.getElementById('pGrid'); grid.innerHTML = "";
+            const data = s.val() || {};
+            Object.keys(data).sort().forEach(n => {
+                grid.innerHTML += `<div class="bg-white rounded-xl p-2 shadow-sm border border-slate-100 flex flex-col gap-2">
+                    <button onclick="joinQueue('${n}')" class="py-3 bg-slate-50 rounded-lg text-[10px] font-black uppercase text-slate-800">${n}</button>
+                    <button onclick="set(ref(db, 'attending_today/${n}'), {timestamp: serverTimestamp()})" class="text-[8px] font-black text-blue-500 uppercase">Mark Coming</button>
+                </div>`;
+            });
+        });
+
+        onValue(ref(db, 'daily_players'), s => {
+            const rawData = [];
+            s.forEach(c => { rawData.push({id: c.key, ...c.val()}); });
+            currentQ = rawData.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+            const list = document.getElementById('qList'); list.innerHTML = "";
+            currentQ.forEach((p, i) => {
+                list.innerHTML += `<div class="p-4 bg-white rounded-2xl mb-2 flex justify-between items-center border-l-8 ${i < 4 ? 'border-yellow-400' : 'border-slate-100'} shadow-sm">
+                    <div class="flex flex-col"><span class="font-black text-[11px] uppercase">${p.name}</span><span class="text-[8px] text-slate-400 font-bold uppercase mt-1">🕒 ${formatTime(p.timestamp)}</span></div>
+                    <div onclick="removeFromQueue('${p.id}')" class="remove-btn text-slate-300 hover:text-red-500 text-3xl font-light">×</div>
+                </div>`;
+            });
+            document.getElementById('qCount').innerText = currentQ.length;
+            document.getElementById('nextBoxContent').innerHTML = currentQ.length >= 4 ? `<span class="text-yellow-400 mr-2 italic">NEXT:</span> ${currentQ[0].name}+${currentQ[3].name} vs ${currentQ[1].name}+${currentQ[2].name}` : "Waiting for 4 players...";
+            const startBtn = document.getElementById('startBtn');
+            if (currentQ.length >= 4) { startBtn.classList.remove('opacity-30', 'pointer-events-none'); startBtn.classList.add('glow-start'); } 
+            else { startBtn.classList.add('opacity-30', 'pointer-events-none'); startBtn.classList.remove('glow-start'); }
+        });
+
+        onValue(ref(db, 'attending_today'), s => {
+            const list = document.getElementById('attList'); list.innerHTML = "";
+            let count = 0; s.forEach(c => { count++; list.innerHTML += `<button onclick="joinQueue('${c.key}')" class="bg-blue-600 text-white px-3 py-1 rounded-lg text-[10px] font-black mr-2 mb-2 uppercase shadow-md">${c.key}</button>`; });
+            document.getElementById('attCount').innerText = count;
+        });
+
+        onValue(ref(db, 'current_score'), s => { 
+            const d = s.val() || { a: 0, b: 0 }; 
+            document.getElementById('scoreA').innerText = d.a; 
+            document.getElementById('scoreB').innerText = d.b; 
+            if (isUmpire && ((Math.max(d.a, d.b) >= 21 && Math.abs(d.a - d.b) >= 2) || Math.max(d.a, d.b) >= 30)) { 
+                setTimeout(() => finalizeGame(d.a > d.b ? 'RED' : 'BLUE', d.a, d.b), 800); 
+            }
+        });
+        onValue(ref(db, 'shuttle_count'), s => { document.getElementById('shuttleDisplay').innerText = s.val() || 0; });
+        onValue(ref(db, 'current_match'), s => { document.getElementById('scoreArea').className = !!s.val() ? "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 transition-all" : "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 opacity-20 grayscale transition-all"; });
+    </script>
+</head>
+<body class="bg-[#F8FAFC] p-4 md:p-8 max-w-4xl mx-auto pb-20">
+    <button id="lockBtn" onclick="toggleUmpire()" class="fixed top-4 right-4 bg-slate-800 text-white px-4 py-2 rounded-full font-black text-[10px] z-50">🔒 UNLOCK UMPIRE</button>
+    
+    <div id="nextBox" class="mb-6"><div id="nextBoxContent" class="bg-black text-white p-6 rounded-[2.5rem] text-center font-black text-[11px] uppercase italic shadow-2xl">Connecting...</div></div>
+
+    <div id="scoreArea" class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 opacity-20 grayscale transition-all">
+        <div class="bg-red-600 text-white rounded-[3rem] p-6 shadow-xl flex flex-col items-center">
+            <div id="scoreA" class="text-9xl font-black mb-4">0</div>
+            <div class="umpire-only flex gap-2 w-full">
+                <button onclick="runTransaction(ref(db, 'current_score/a'), c => (c||0)+1)" class="flex-1 bg-white text-red-600 rounded-2xl py-5 text-4xl font-black shadow-md">+</button>
+                <button onclick="runTransaction(ref(db, 'current_score/a'), c => Math.max(0,(c||0)-1))" class="w-16 bg-red-800 text-white rounded-2xl text-xl font-black">-</button>
+            </div>
+        </div>
+        <div class="bg-blue-600 text-white rounded-[3rem] p-6 shadow-xl flex flex-col items-center">
+            <div id="scoreB" class="text-9xl font-black mb-4">0</div>
+            <div class="umpire-only flex gap-2 w-full">
+                <button onclick="runTransaction(ref(db, 'current_score/b'), c => (c||0)+1)" class="flex-1 bg-white text-blue-600 rounded-2xl py-5 text-4xl font-black shadow-md">+</button>
+                <button onclick="runTransaction(ref(db, 'current_score/b'), c => Math.max(0,(c||0)-1))" class="w-16 bg-blue-800 text-white rounded-2xl text-xl font-black">-</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="mb-6 bg-white rounded-[2rem] p-5 shadow-sm border border-slate-100 flex items-center justify-between">
+        <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2 italic">Shuttles Used</span>
+        <div class="flex items-center gap-4">
+            <button onclick="runTransaction(ref(db, 'shuttle_count'), c => Math.max(0,(c||0)-1))" class="w-10 h-10 rounded-full bg-slate-50 text-slate-400 font-bold">-</button>
+            <span id="shuttleDisplay" class="text-3xl font-black text-slate-800 w-10 text-center">0</span>
+            <button onclick="runTransaction(ref(db, 'shuttle_count'), c => (c||0)+1)" class="w-10 h-10 rounded-full bg-yellow-400 text-white font-bold shadow-lg">+</button>
+        </div>
+    </div>
+
+    <button id="startBtn" onclick="startSmartMatch()" class="umpire-only w-full py-8 bg-slate-900 text-white rounded-[3rem] font-black text-2xl uppercase mb-10 shadow-2xl">Start Match</button>
+
+    <details class="mb-4 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden" open>
+        <summary class="p-6 flex justify-between items-center hover:bg-slate-50"><span class="text-[10px] font-black text-slate-500 uppercase italic tracking-widest">Coming Today (<span id="attCount">0</span>)</span><span class="text-blue-500 text-[9px] font-black uppercase">Tap Name to Queue ▼</span></summary>
+        <div id="attList" class="flex flex-wrap p-6 pt-0"></div>
+    </details>
+
+    <details class="mb-10 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden" open>
+        <summary class="p-6 flex justify-between items-center hover:bg-slate-50">
+            <span class="text-[10px] font-black text-slate-500 uppercase italic tracking-widest">Waiting Queue (<span id="qCount">0</span>)</span>
+            <button onclick="clearAllQueues()" class="umpire-only bg-orange-100 text-orange-600 px-3 py-1 rounded-lg text-[8px] font-black uppercase">🗑️ Clear Queue</button>
+        </summary>
+        <div id="qList" class="p-6 pt-0"></div>
+    </details>
+
+    <details class="mb-10 bg-white rounded-[2rem] shadow-sm border border-slate-100 overflow-hidden">
+        <summary class="p-6 text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] hover:bg-slate-50">▼ Player Directory (Add/Edit)</summary>
+        <div class="p-6 pt-0">
+            <div class="flex bg-slate-100 p-2 rounded-2xl mb-6">
+                <input type="text" id="newPlayerName" placeholder="New Player Name..." class="bg-transparent flex-1 px-4 py-2 text-sm font-bold outline-none">
+                <button onclick="const n=document.getElementById('newPlayerName').value.trim(); if(n) { set(ref(db, `master_players/${n}`), true); document.getElementById('newPlayerName').value=''; }" class="bg-blue-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase shadow-md">Add</button>
+            </div>
+            <div id="pGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+        </div>
+    </details>
+
+    <div class="bg-slate-900 text-white rounded-[3rem] p-10 shadow-2xl">
+        <button onclick="if(confirm('Finish Night?')) { set(ref(db,'daily_players'),null); set(ref(db,'attending_today'),null); set(ref(db,'shuttle_count'),0); set(ref(db,'current_match'),null); set(ref(db,'current_score'),{a:0,b:0}); }" class="umpire-only w-full py-5 bg-green-600 text-white rounded-2xl font-black text-xs uppercase">🏁 Finish Night (Full Reset)</button>
+    </div>
+</body>
+</html>
